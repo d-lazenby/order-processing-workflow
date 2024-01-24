@@ -1,0 +1,245 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Parallel",
+  "States": {
+    "Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Verify Payment Details",
+          "States": {
+            "Verify Payment Details": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload.$": "$",
+                "FunctionName": "arn:aws:lambda:{region}:{account}:function:PaymentVerifier:$LATEST"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Retrieve Item Stock Levels",
+          "States": {
+            "Retrieve Item Stock Levels": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:{region}:{account}:function:ItemsInStockRetriever:$LATEST",
+                "Payload": {
+                  "items.$": "$.orderContents.items"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.object",
+      "ResultSelector": {
+        "paymentVerified.$": "$[0].paymentVerified",
+        "items.$": "$[1]"
+      },
+      "Next": "Validate Payment Details Verification",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Fail"
+        }
+      ]
+    },
+    "Validate Payment Details Verification": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.object.paymentVerified",
+          "BooleanEquals": false,
+          "Next": "Fail"
+        }
+      ],
+      "Default": "Transform Output"
+    },
+    "Transform Output": {
+      "Type": "Pass",
+      "Parameters": {
+        "items.$": "$.object.items",
+        "paymentVerified.$": "$.object.paymentVerified",
+        "orderTotal.$": "$.orderTotal",
+        "customerId.$": "$.customerId",
+        "paymentDetails.$": "$.paymentDetails"
+      },
+      "Next": "Validate Stock > 0"
+    },
+    "Validate Stock > 0": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "EXPRESS"
+        },
+        "StartAt": "Choice",
+        "States": {
+          "Choice": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.quantityInStock",
+                "NumericEquals": 0,
+                "Next": "Not in Stock"
+              }
+            ],
+            "Default": "Placeholder"
+          },
+          "Not in Stock": {
+            "Type": "Fail"
+          },
+          "Placeholder": {
+            "Type": "Pass",
+            "End": true
+          }
+        }
+      },
+      "Label": "ValidateStock0",
+      "MaxConcurrency": 1000,
+      "ItemsPath": "$.items",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Fail"
+        }
+      ],
+      "ResultPath": null,
+      "Next": "Charge Payment"
+    },
+    "Charge Payment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:{region}:{account}:function:chargePaymentMethod:$LATEST"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.output",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "PaymentError"
+          ],
+          "Comment": "PaymentError encountered",
+          "Next": "Create Order Entry with State PAYMENT_FAILED",
+          "ResultPath": "$.output"
+        }
+      ],
+      "Next": "Create Order Entry with State PAYMENT_PROCESSED"
+    },
+    "Create Order Entry with State PAYMENT_PROCESSED": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "CustomerOrders",
+        "Item": {
+          "OrderId": {
+            "S.$": "States.UUID()"
+          },
+          "State": {
+            "S": "PAYMENT_PROCESSED"
+          },
+          "CustomerId": {
+            "S.$": "$.customerId"
+          },
+          "OrderTotal": {
+            "N.$": "States.Format('{}', $.orderTotal)"
+          },
+          "Items": {
+            "S.$": "States.JsonToString($.items)"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Publish to interested parties"
+    },
+    "Publish to interested parties": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "Message.$": "$",
+        "TopicArn": "arn:aws:sns:{region}:{account}:OrderUpdates"
+      },
+      "End": true
+    },
+    "Create Order Entry with State PAYMENT_FAILED": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "CustomerOrders",
+        "Item": {
+          "OrderId": {
+            "S.$": "States.UUID()"
+          },
+          "State": {
+            "S": "PAYMENT_FAILED"
+          },
+          "CustomerId": {
+            "S.$": "$.customerId"
+          },
+          "OrderTotal": {
+            "N.$": "States.Format('{}', $.orderTotal)"
+          },
+          "Items": {
+            "S.$": "States.JsonToString($.items)"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Publish to interested parties"
+    },
+    "Fail": {
+      "Type": "Fail"
+    }
+  }
+}
