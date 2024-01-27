@@ -1,0 +1,29 @@
+{
+    "orderContents": {
+        "items": [
+            {
+                "itemId": "item-c9f4x",
+                "price": 1000,
+                "itemDescription": "Macbook"
+            },
+            {
+                "itemId": "item-g7b2q",
+                "price": 500,
+                "itemDescription": "iPhone"
+            },
+            {
+                "itemId": "item-p4c97",
+                "price": 750,
+                "itemDescription": "iPad"
+            }
+        ]
+    },
+    "orderTotal": 2250,
+    "customerId": "c-id-56392",
+    "paymentDetails": {
+        "name": "John Doe",
+        "cardType": "MASTERCARD",
+        "cardNumber": "5192 7402 9672 1055",
+        "expiration": "08/26"
+    }
+}
