@@ -8,7 +8,7 @@ The idea was that we work for a retail outlet and need to build a workflow that 
 3. Write the order details to a table.
 4. Notify interested parties (e.g. the customer) of success or failure of the order.
 
-The directory `lambda` contains the Python code for the three Lambda functions. The architecture is given below and the Amazon States Language representation is contained in `workflow.asl.json`. 
+The directory `lambda` contains the Python code for the three Lambda functions, which were enabled with a Python 3.12 runtime. The architecture is given below and the Amazon States Language representation is contained in `workflow.asl.json`. 
 
 ![Workflow architecture](figures/stepfunctions_graph.png)
 
